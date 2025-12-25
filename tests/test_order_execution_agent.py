@@ -57,6 +57,43 @@ class InlineInventoryAgent:
         return compute_procurement_decision(self.engine, request_text, date).to_dict()
 
 
+class FakeQuoteModel(Model):
+    """Deterministic model that calls prepare_quote then echoes the tool output."""
+
+    def __init__(self, tool_args: dict):
+        super().__init__()
+        self.tool_args = tool_args
+        self._step = 0
+
+    def generate(self, messages, **kwargs):
+        if self._step == 0:
+            self._step += 1
+            tool_calls = [
+                ChatMessageToolCall(
+                    function=ChatMessageToolCallFunction(name="prepare_quote", arguments=self.tool_args),
+                    id="call_1",
+                    type="function",
+                )
+            ]
+        else:
+            self._step += 1
+            tool_result = None
+            for message in reversed(messages):
+                role = getattr(message, "role", None)
+                if role in {getattr(MessageRole, "TOOL", None), getattr(MessageRole, "TOOL_RESPONSE", None)}:
+                    tool_result = message.content
+                    break
+            tool_calls = [
+                ChatMessageToolCall(
+                    function=ChatMessageToolCallFunction(name="final_answer", arguments={"answer": tool_result}),
+                    id="call_2",
+                    type="function",
+                )
+            ]
+
+        return ChatMessage(role=MessageRole.ASSISTANT, tool_calls=tool_calls)
+
+
 def test_order_execution_records_sale_and_replenishes(engine, start_date):
     inventory_df = pd.read_sql("SELECT * FROM inventory", engine)
     item = inventory_df.iloc[0]
@@ -88,8 +125,17 @@ def test_quote_to_order_integration(engine, start_date):
     sale_units = min(sale_units, int(item["current_stock"]))
 
     inventory_agent = InlineInventoryAgent(engine, start_date)
-    quote_agent = QuoteAgent(engine, inventory_agent)
     quote_payload = {"request": request_text, "as_of_date": start_date, "order_size": "medium"}
+    quote_model = FakeQuoteModel(
+        {
+            "request_text": quote_payload["request"],
+            "as_of_date": quote_payload["as_of_date"],
+            "order_size": quote_payload["order_size"],
+            "job_type": quote_payload.get("job_type"),
+            "event_type": quote_payload.get("event_type"),
+        }
+    )
+    quote_agent = QuoteAgent(engine, inventory_agent, model=quote_model)
     quote = quote_agent.generate_quote(quote_payload)
 
     model = FakeOrderModel(

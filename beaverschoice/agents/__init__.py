@@ -13,7 +13,7 @@ from .orchestrator_agent import (  # noqa: F401
     OrchestratorAgent,
     create_openai_orchestrator_agent,
 )
-from .quote_agent import QuoteAgent  # noqa: F401
+from .quote_agent import QuoteAgent, create_openai_quote_agent  # noqa: F401
 from .finance_agent import (  # noqa: F401
     FinanceAgent,
     FinancialReportTool,

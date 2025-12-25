@@ -1,10 +1,48 @@
 import pandas as pd
 import pytest
+from smolagents.models import ChatMessage, ChatMessageToolCall, ChatMessageToolCallFunction, MessageRole, Model
 
 from beaverschoice.agents.quote_agent import QuoteAgent, _extract_terms, _size_factor
 from beaverschoice.procurement import compute_procurement_decision
 from beaverschoice.tooling import recent_quote_history
 from beaverschoice.transactions import create_transaction
+
+
+class FakeQuoteModel(Model):
+    """Deterministic model that calls prepare_quote then echoes the tool output."""
+
+    def __init__(self, tool_args: dict):
+        super().__init__()
+        self.tool_args = tool_args
+        self._step = 0
+
+    def generate(self, messages, **kwargs):
+        if self._step == 0:
+            self._step += 1
+            tool_calls = [
+                ChatMessageToolCall(
+                    function=ChatMessageToolCallFunction(name="prepare_quote", arguments=self.tool_args),
+                    id="call_1",
+                    type="function",
+                )
+            ]
+        else:
+            self._step += 1
+            tool_result = None
+            for message in reversed(messages):
+                role = getattr(message, "role", None)
+                if role in {getattr(MessageRole, "TOOL", None), getattr(MessageRole, "TOOL_RESPONSE", None)}:
+                    tool_result = message.content
+                    break
+            tool_calls = [
+                ChatMessageToolCall(
+                    function=ChatMessageToolCallFunction(name="final_answer", arguments={"answer": tool_result}),
+                    id="call_2",
+                    type="function",
+                )
+            ]
+
+        return ChatMessage(role=MessageRole.ASSISTANT, tool_calls=tool_calls)
 
 
 class FakeInventoryAgent:
@@ -28,7 +66,16 @@ def test_quote_agent_returns_priced_quote_with_history(engine, start_date):
         "event_type": "festival",
         "as_of_date": start_date,
     }
-    agent = QuoteAgent(engine, inventory_agent)
+    model = FakeQuoteModel(
+        {
+            "request_text": payload["request"],
+            "as_of_date": payload["as_of_date"],
+            "order_size": payload["order_size"],
+            "job_type": payload["job_type"],
+            "event_type": payload["event_type"],
+        }
+    )
+    agent = QuoteAgent(engine, inventory_agent, model=model)
     quote = agent.generate_quote(payload)
 
     terms = _extract_terms(payload)
@@ -62,7 +109,16 @@ def test_quote_agent_applies_markup_when_restock_needed(engine, start_date):
 
     inventory_agent = FakeInventoryAgent(engine, start_date)
     payload = {"request": f"Order {item['item_name']} immediately", "order_size": "small", "as_of_date": start_date}
-    agent = QuoteAgent(engine, inventory_agent)
+    model = FakeQuoteModel(
+        {
+            "request_text": payload["request"],
+            "as_of_date": payload["as_of_date"],
+            "order_size": payload.get("order_size"),
+            "job_type": payload.get("job_type"),
+            "event_type": payload.get("event_type"),
+        }
+    )
+    agent = QuoteAgent(engine, inventory_agent, model=model)
     quote = agent.generate_quote(payload)
 
     assert quote["availability"]["restock_recommended"] is True
