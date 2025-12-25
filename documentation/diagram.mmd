@@ -1,75 +1,52 @@
 flowchart LR
 
-  %% ========= EXTERNAL ACTORS =========
+  %% ========= ACTORS =========
   Customer([Customer])
-  Supplier([Paper Supplier])
-  Payment([Payment Gateway])
-  Shipping([Shipping / Logistics])
 
   %% ========= AGENTS =========
-  subgraph System[Multi-Agent Inventory & Quoting System]
+  subgraph Agents[Planned Agent Team]
     Orchestrator["Orchestrator Agent"]
-    InvAgent["Inventory Agent"]
-    QuoteAgent["Quoting Agent"]
-    OrderAgent["Order Fulfillment Agent"]
+    InventoryAgent["Inventory & Procurement Agent"]
+    QuoteAgent["Pricing & Quote Agent"]
+    OrderAgent["Order Execution Agent"]
+    FinanceAgent["Finance Agent"]
   end
 
-  %% ========= DATA / TOOLS =========
-  subgraph DataStores[Internal Databases]
-    InvDB[(Inventory DB)]
-    OrderDB[(Order & Customer DB)]
-    QuoteHist[(Quote History DB)]
+  %% ========= TOOLS / DATA =========
+  subgraph Tools[Available Tools]
+    InventoryTools["get_all_inventory()<br/>get_stock_level()"]
+    QuoteHistory["search_quote_history()"]
+    DeliveryETA["get_supplier_delivery_date()"]
+    Transactions["create_transaction()"]
+    FinReport["generate_financial_report()"]
+    DB[(SQLite DB:<br/>transactions,<br/>inventory,<br/>quote_requests,<br/>quotes)]
   end
 
-  subgraph Tools[Internal Tools]
-    PricingTool["Pricing & Discount Engine"]
-    LeadTimeTool["Supplier Lead-Time Tool"]
-    ReorderTool["Replenishment / PO Tool"]
-    FulfillTool["Order Fulfillment Tool"]
-    NotifyTool["Notification Tool"]
-  end
+  DB <--> InventoryTools
+  DB <--> QuoteHistory
+  DB <--> Transactions
+  DB <--> FinReport
 
-  %% ========= CUSTOMER FLOW =========
-  Customer -->|1. Inquiry| Orchestrator
-  Orchestrator -->|2. Validate Request| Orchestrator
+  %% ========= REQUEST HANDLING =========
+  Customer -->|Request| Orchestrator
+  Orchestrator -->|Context + intent| QuoteAgent
+  QuoteAgent -->|Pricing anchors| QuoteHistory
+  QuoteAgent -->|Stock check| InventoryAgent
+  InventoryAgent --> InventoryTools
+  InventoryAgent --> DeliveryETA
+  InventoryAgent -->|Restock recommendations| Orchestrator
+  QuoteAgent -->|Quote & availability| Orchestrator
 
-  %% ========= INVENTORY FLOW =========
-  Orchestrator -->|3. Check Availability| InvAgent
-  InvAgent --> InvDB
-  InvDB --> InvAgent
-  InvAgent -->|Supplier Timing| LeadTimeTool
-  LeadTimeTool --> InvAgent
-  InvAgent -->|Reorder if Needed| ReorderTool
-  InvAgent -->|4. Availability Result| Orchestrator
+  %% ========= ORDERING & FULFILLMENT =========
+  Orchestrator -->|Approved sale| OrderAgent
+  OrderAgent -->|Record sale| Transactions
+  OrderAgent -->|Replenish if needed| Transactions
+  OrderAgent -->|Customer ETA| DeliveryETA
 
-  %% ========= QUOTE FLOW =========
-  Orchestrator -->|5. Request Quote| QuoteAgent
-  QuoteAgent --> QuoteHist
-  QuoteAgent --> PricingTool
-  PricingTool --> QuoteAgent
-  QuoteHist --> QuoteAgent
-  QuoteAgent -->|6. Quote Details| Orchestrator
+  %% ========= REPORTING =========
+  Orchestrator -->|Status snapshot| FinanceAgent
+  FinanceAgent --> FinReport
+  FinReport --> Orchestrator
 
-  %% ========= RETURN QUOTE =========
-  Orchestrator -->|7. Send Quote| Customer
-  Customer -->|8. Accept / Modify / Reject| Orchestrator
-
-  %% ========= ORDER FLOW =========
-  Orchestrator -->|9. Create Order| OrderAgent
-  OrderAgent -->|Reserve Stock| FulfillTool
-  FulfillTool --> InvDB
-  FulfillTool --> OrderDB
-
-  OrderAgent --> Payment
-  Payment --> OrderAgent
-
-  OrderAgent --> Shipping
-  Shipping --> OrderAgent
-
-  OrderAgent --> NotifyTool
-  NotifyTool --> Customer
-  NotifyTool --> Orchestrator
-
-  %% ========= FEEDBACK =========
-  OrderAgent --> QuoteHist
-  InvAgent --> InvDB
+  %% ========= RESPONSE =========
+  Orchestrator -->|Quote / order confirmation| Customer
