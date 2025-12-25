@@ -1,24 +1,73 @@
+import logging
 import time
+
 import pandas as pd
 
+from beaverschoice.agents.finance_agent import create_openai_finance_agent
+from beaverschoice.agents.inventory_agent import create_openai_inventory_agent
+from beaverschoice.agents.order_execution_agent import create_openai_order_execution_agent
+from beaverschoice.agents.orchestrator_agent import OrchestratorAgent, create_openai_orchestrator_agent
+from beaverschoice.agents.quote_agent import create_openai_quote_agent
 from beaverschoice.config import data_path
 from beaverschoice.db import get_engine, init_database
 from beaverschoice.finance import generate_financial_report
 
+logger = logging.getLogger(__name__)
 
-def handle_request(_engine, request: str) -> str:
+
+def _setup_logging():
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+
+def initialize_agents(engine=None, model_id: str = "gpt-4o-mini") -> dict:
     """
-    Placeholder for the multi-agent system.
-    Replace this with orchestration logic that evaluates the request and executes actions.
+    Build the full agent stack and return them for reuse across flows.
     """
-    return f"[TODO] Handle request: {request}"
+    engine = engine or get_engine()
+    inventory_agent = create_openai_inventory_agent(engine=engine, model_id=model_id)
+    quote_agent = create_openai_quote_agent(engine=engine, inventory_agent=inventory_agent, model_id=model_id)
+    order_agent = create_openai_order_execution_agent(engine=engine, model_id=model_id)
+    finance_agent = create_openai_finance_agent(engine=engine, model_id=model_id)
+    orchestrator = create_openai_orchestrator_agent(
+        quote_agent=quote_agent,
+        engine=engine,
+        model_id=model_id,
+        order_agent=order_agent,
+        finance_agent=finance_agent,
+    )
+
+    logger.info("Agents ready: inventory, quote, order execution, finance, orchestrator.")
+    return {
+        "engine": engine,
+        "inventory_agent": inventory_agent,
+        "quote_agent": quote_agent,
+        "order_agent": order_agent,
+        "finance_agent": finance_agent,
+        "orchestrator": orchestrator,
+    }
+
+
+def handle_request(orchestrator: OrchestratorAgent, request: str, additional_args: dict | None = None) -> str:
+    """
+    Route a request through the orchestrator so the LLM can select the right tool.
+    """
+    additional_args = additional_args or {}
+    logger.info("Routing through orchestrator: %s", request.replace("\n", " ")[:120])
+    return orchestrator.run(request, additional_args=additional_args)
+
 
 
 def run_test_scenarios(engine=None):
+    _setup_logging()
     engine = engine or get_engine()
 
     print("Initializing Database...")
     init_database(engine)
+    logger.info("Building agents for test scenarios...")
+    agents = initialize_agents(engine)
+    orchestrator = agents["orchestrator"]
     try:
         quote_requests_sample = pd.read_csv(data_path("quote_requests_sample.csv"))
         quote_requests_sample["request_date"] = pd.to_datetime(
@@ -46,7 +95,13 @@ def run_test_scenarios(engine=None):
         print(f"Inventory Value: ${current_inventory:.2f}")
 
         request_with_date = f"{row['request']} (Date of request: {request_date})"
-        response = handle_request(engine, request_with_date)
+        additional_args = {
+            "as_of_date": request_date,
+            "order_size": row.get("need_size"),
+            "job_type": row.get("job"),
+            "event_type": row.get("event"),
+        }
+        response = handle_request(orchestrator, request_with_date, additional_args)
 
         report = generate_financial_report(engine, request_date)
         current_cash = report["cash_balance"]
