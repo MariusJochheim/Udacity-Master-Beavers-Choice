@@ -14,12 +14,13 @@ flowchart LR
 
   %% ========= TOOLS / DATA =========
   subgraph Tools[Core Functions & Data]
-    QuoteHistory["recent_quote_history()"]
-    Procurement["compute_procurement_decision()"]
-    InventorySnapshot["get_all_inventory()<br/>get_stock_level()"]
-    RecordTxn["record_transaction()<br/>create_transaction()"]
-    DeliveryETA["get_supplier_delivery_date()"]
-    FinReport["generate_financial_report()"]
+    QuoteHistory["search_quote_history()<br/><span style='font-size:10px'>Price anchors</span>"]
+    Procurement["compute_procurement_decision()<br/><span style='font-size:10px'>Uses get_stock_level() + get_supplier_delivery_date()</span>"]
+    InventorySnapshot["get_all_inventory()<br/>get_stock_level()<br/><span style='font-size:10px'>Inventory snapshot</span>"]
+    RecordTxn["record_transaction()<br/>create_transaction()<br/><span style='font-size:10px'>Persist sales/restocks</span>"]
+    CashBalance["get_cash_balance()<br/><span style='font-size:10px'>Budget guardrail</span>"]
+    DeliveryETA["get_supplier_delivery_date()<br/><span style='font-size:10px'>Customer ETA</span>"]
+    FinReport["generate_financial_report()<br/><span style='font-size:10px'>Finance snapshot</span>"]
     DB[(SQLite DB:<br/>inventory,<br/>transactions,<br/>quote_requests,<br/>quotes)]
   end
 
@@ -43,12 +44,14 @@ flowchart LR
   %% ========= ORDERING & FULFILLMENT =========
   Orchestrator -->|order_request| OrderAgent
   OrderAgent -->|Match item & stock| Procurement
+  OrderAgent -->|Budget check| CashBalance
   OrderAgent -->|Record sale/restock| RecordTxn
   OrderAgent -->|Customer ETA| DeliveryETA
 
   %% ========= REPORTING =========
   Orchestrator -->|status_snapshot| FinanceAgent
   FinanceAgent --> FinReport
+  FinanceAgent -->|Cash + inventory| CashBalance
   FinReport --> Orchestrator
 
   %% ========= RESPONSE =========
