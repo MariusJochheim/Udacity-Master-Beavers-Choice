@@ -8,8 +8,8 @@ from smolagents.models import Model, OpenAIModel
 from smolagents.tools import Tool
 
 from beaverschoice.config import OPENAI_API_KEY, OPENAI_BASE_URL
+from beaverschoice.agents.order_execution_agent import OrderExecutionAgent, create_openai_order_execution_agent
 from beaverschoice.db import get_engine
-from beaverschoice.procurement import compute_procurement_decision
 from beaverschoice.tooling import _normalize_date_input, _validate_nonempty_string, summarize_financials
 
 
@@ -35,12 +35,16 @@ def _format_quote_message(quote: Dict[str, Any]) -> str:
 
 def _format_order_message(order_result: Dict[str, Any]) -> str:
     item = order_result.get("matched_item") or order_result.get("request")
-    eta = order_result.get("estimated_delivery_date")
-    quantity = order_result.get("recommended_order_quantity") or order_result.get("quantity")
+    sale_receipt = order_result.get("sale_receipt") or {}
+    eta = order_result.get("customer_eta") or order_result.get("estimated_delivery_date")
+    quantity = sale_receipt.get("quantity") or order_result.get("quantity") or order_result.get("recommended_order_quantity")
+    price = sale_receipt.get("price") or order_result.get("sale_price_total")
 
     parts = [f"Order placed for {item}."]
     if quantity:
         parts.append(f"Quantity: {quantity}.")
+    if isinstance(price, (int, float)):
+        parts.append(f"Total ${float(price):.2f}.")
     if eta:
         parts.append(f"ETA {eta}.")
     return " ".join(parts).strip()
@@ -71,19 +75,6 @@ class FinanceStatusAgent:
             "inventory_value": report.inventory_value,
             "top_selling_products": report.top_selling_products,
         }
-
-
-class OrderAgent:
-    """Simple order processor that reuses procurement logic for delivery estimates."""
-
-    def __init__(self, engine=None):
-        self.engine = engine or get_engine()
-
-    def place_order(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
-        request = _validate_nonempty_string(request_payload.get("request", ""), "request")
-        as_of_date = _normalize_date_input(request_payload.get("as_of_date") or datetime.now(), "as_of_date")
-        decision = compute_procurement_decision(self.engine, request, as_of_date).to_dict()
-        return {"request": request, "as_of_date": as_of_date, **decision}
 
 
 class QuoteTool(Tool):
@@ -127,25 +118,34 @@ class QuoteTool(Tool):
 
 
 class OrderTool(Tool):
-    """Tool that places an order and returns the delivery summary."""
+    """Tool that places an order through the OrderExecutionAgent and returns the delivery summary."""
 
     name = "order_request"
     description = "Place an order for the requested items and return delivery ETA."
     inputs = {
         "request_text": {"type": "string", "description": "The customer's request text"},
         "as_of_date": {"type": "string", "description": "ISO date for the request", "nullable": True},
+        "quantity": {"type": "integer", "description": "Units to order", "nullable": True},
+        "quoted_total": {"type": "number", "description": "Total from prior quote", "nullable": True},
     }
     output_type = "string"
 
-    def __init__(self, order_agent: OrderAgent):
+    def __init__(self, order_agent: OrderExecutionAgent):
         super().__init__()
         self.order_agent = order_agent
 
-    def forward(self, request_text: str, as_of_date: str | None = None) -> str:
+    def forward(self, request_text: str, as_of_date: str | None = None, quantity: int | None = None, quoted_total: float | None = None) -> str:
         request = _validate_nonempty_string(request_text, "request_text")
-        payload = {"request": request, "as_of_date": _normalize_date_input(as_of_date or datetime.now(), "as_of_date")}
-        decision = self.order_agent.place_order(payload)
-        return _format_order_message(decision)
+        payload = {
+            "request_text": request,
+            "as_of_date": _normalize_date_input(as_of_date or datetime.now(), "as_of_date"),
+            "quantity": quantity,
+            "quoted_total": quoted_total,
+        }
+        order_result = self.order_agent.run(request, additional_args=payload)
+        if not isinstance(order_result, dict):
+            raise ValueError("order execution agent must return a dictionary payload")
+        return _format_order_message(order_result)
 
 
 class StatusTool(Tool):
@@ -191,13 +191,16 @@ class FinalAnswerTool(Tool):
 class OrchestratorAgent(ToolCallingAgent):
     """
     LLM-driven orchestrator that routes to quote/order/status tools via smolagents.
+
+    The order path delegates to OrderExecutionAgent so sales are recorded and replenishment
+    can be triggered when needed.
     """
 
     def __init__(
         self,
         engine=None,
         quote_agent=None,
-        order_agent: OrderAgent | None = None,
+        order_agent: OrderExecutionAgent | None = None,
         finance_agent: FinanceStatusAgent | None = None,
         model: Model | None = None,
         **kwargs,
@@ -206,10 +209,12 @@ class OrchestratorAgent(ToolCallingAgent):
             raise ValueError("An LLM model must be provided to OrchestratorAgent")
         if quote_agent is None:
             raise ValueError("quote_agent is required for quoting flows")
+        if order_agent is None:
+            raise ValueError("order_agent is required for order execution flows")
 
         self.engine = engine or get_engine()
         self.quote_agent = quote_agent
-        self.order_agent = order_agent or OrderAgent(self.engine)
+        self.order_agent = order_agent
         self.finance_agent = finance_agent or FinanceStatusAgent(self.engine)
 
         quote_tool = QuoteTool(self.quote_agent)
@@ -223,12 +228,12 @@ class OrchestratorAgent(ToolCallingAgent):
             add_base_tools=False,
             max_tool_threads=1,
             instructions=(
-                "You are the Orchestrator agent. Identify if the user wants a quote, to place an order, "
-                "or a financial/status update. Call exactly one of the tools: "
-                "quote_request (for pricing/quotes), order_request (for purchasing/ETA), "
+                "You are the Orchestrator agent. Identify if the user wants a quote, to place an order (record the sale "
+                "and replenish if needed), or a financial/status update. Call exactly one of the tools: "
+                "quote_request (for pricing/quotes), order_request (for executing the order and ETA), "
                 "status_snapshot (for finance/inventory status). When available, pass through as_of_date, "
-                "job_type, order_size, and event_type arguments to keep context. "
-                "When done, call final_answer with the tool result as the answer."
+                "job_type, order_size, event_type, quantity, and quoted_total arguments to keep context. When done, "
+                "call final_answer with the tool result as the answer."
             ),
             **kwargs,
         )
@@ -240,7 +245,7 @@ def create_openai_orchestrator_agent(
     model_id: str = "gpt-4o-mini",
     api_key: str | None = None,
     api_base: str | None = None,
-    order_agent: OrderAgent | None = None,
+    order_agent: OrderExecutionAgent | None = None,
     finance_agent: FinanceStatusAgent | None = None,
     **kwargs,
 ) -> OrchestratorAgent:
@@ -253,6 +258,8 @@ def create_openai_orchestrator_agent(
         raise ValueError("OPENAI_API_KEY is required to initialize the OpenAI model")
 
     model = OpenAIModel(model_id=model_id, api_key=api_key, api_base=api_base)
+    order_agent = order_agent or create_openai_order_execution_agent(engine=engine, model_id=model_id, api_key=api_key, api_base=api_base)
+
     return OrchestratorAgent(
         engine=engine,
         quote_agent=quote_agent,

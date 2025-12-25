@@ -18,18 +18,27 @@ class FakeQuoteAgent:
         }
 
 
-class FakeOrderAgent:
+class FakeOrderExecutionAgent:
     def __init__(self):
         self.called_with = None
+        self.called_additional_args = None
 
-    def place_order(self, payload):
-        self.called_with = payload
+    def run(self, request_text, additional_args=None):
+        self.called_with = request_text
+        self.called_additional_args = additional_args or {}
         return {
-            "request": payload["request"],
-            "as_of_date": payload["as_of_date"],
+            "request": request_text,
             "matched_item": "A4 paper",
-            "recommended_order_quantity": 250,
-            "estimated_delivery_date": "2025-01-08",
+            "customer_eta": "2025-01-08",
+            "sale_receipt": {
+                "transaction_id": 1,
+                "item_name": "A4 paper",
+                "transaction_type": "sales",
+                "quantity": 250,
+                "price": 125.0,
+                "as_of_date": self.called_additional_args.get("as_of_date"),
+                "resulting_stock": 100,
+            },
         }
 
 
@@ -86,7 +95,7 @@ class FakeOrchestratorModel(Model):
 
 def test_orchestrator_llm_routes_quote(engine, start_date):
     quote_agent = FakeQuoteAgent()
-    order_agent = FakeOrderAgent()
+    order_agent = FakeOrderExecutionAgent()
     finance_agent = FakeFinanceAgent()
 
     model = FakeOrchestratorModel(
@@ -117,7 +126,7 @@ def test_orchestrator_llm_routes_quote(engine, start_date):
 
 def test_orchestrator_llm_routes_order_and_status(engine, start_date):
     quote_agent = FakeQuoteAgent()
-    order_agent = FakeOrderAgent()
+    order_agent = FakeOrderExecutionAgent()
     finance_agent = FakeFinanceAgent()
 
     order_model = FakeOrchestratorModel(
@@ -133,7 +142,9 @@ def test_orchestrator_llm_routes_order_and_status(engine, start_date):
     )
 
     order_response = order_orchestrator.run("Order paper cups for delivery", additional_args={"as_of_date": start_date})
-    assert order_agent.called_with["request"] == "Order paper cups for delivery"
+    assert order_agent.called_with == "Order paper cups for delivery"
+    assert order_agent.called_additional_args["request_text"] == "Order paper cups for delivery"
+    assert order_agent.called_additional_args["as_of_date"] == start_date
     assert "Order placed" in order_response
     assert "ETA" in order_response
 
