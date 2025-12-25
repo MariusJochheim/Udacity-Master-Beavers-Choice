@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List
+import re
 
 import pandas as pd
 from smolagents.agents import ToolCallingAgent
@@ -21,6 +22,7 @@ from beaverschoice.tooling import (
     _validate_price,
     record_transaction,
 )
+from beaverschoice.transactions import get_cash_balance
 
 
 def _unit_price(engine, item_name: str) -> float:
@@ -38,6 +40,41 @@ def _unit_price(engine, item_name: str) -> float:
 def _receipt_to_dict(receipt: TransactionReceipt) -> Dict[str, Any]:
     """Convert a TransactionReceipt dataclass into a serializable dict."""
     return asdict(receipt)
+
+
+def _parse_request_items(request_text: str, fallback_quantity: int) -> List[Dict[str, Any]]:
+    """
+    Extract individual item requests from free-form text.
+
+    The parser is intentionally simple: it looks for leading quantities on lines and
+    splits on common bullet markers, then falls back to inline quantity parsing. Non-quantity
+    lines are ignored unless nothing was detected, in which case the full request is used.
+    """
+    items: list[Dict[str, Any]] = []
+    line_pattern = re.compile(r"^(?P<qty>[0-9][0-9,]*)\\s*(?:[a-zA-Z]+)?\\s*(?:of\\s+)?(?P<item>.+)$")
+    for raw_line in request_text.splitlines():
+        line = raw_line.strip().lstrip("-•* ").strip()
+        if not line:
+            continue
+        match = line_pattern.match(line)
+        if match:
+            qty = int(match.group("qty").replace(",", ""))
+            item_desc = match.group("item").strip()
+            if item_desc:
+                items.append({"request_text": item_desc, "quantity": qty})
+    # Fall back to inline parsing if no bullet-style quantities were found.
+    if not items:
+        inline_pattern = re.compile(r"(?P<qty>[0-9][0-9,]*)\\s+(?P<item>[a-zA-Z][^,;\\n]+)")
+        for match in inline_pattern.finditer(request_text):
+            qty = int(match.group("qty").replace(",", ""))
+            item_desc = match.group("item").strip()
+            if item_desc:
+                items.append({"request_text": item_desc, "quantity": qty})
+
+    if not items:
+        items.append({"request_text": request_text.strip(), "quantity": fallback_quantity})
+
+    return items
 
 
 class ExecuteOrderTool(Tool):
@@ -71,75 +108,134 @@ class ExecuteOrderTool(Tool):
         qty = _validate_positive_int(quantity or 1, "quantity")
         as_of = _normalize_date_input(as_of_date or datetime.now(), "as_of_date")
 
-        try:
-            decision = compute_procurement_decision(self.engine, request, as_of)
-        except ValueError as exc:
-            # Return a structured error payload so callers can surface a graceful message.
-            return {"error": str(exc), "request": request, "quantity": qty, "as_of_date": as_of}
-        item_name = decision.matched_item
-        unit_price = _unit_price(self.engine, item_name)
-        available_stock = max(int(decision.current_stock), 0)
+        # Parse multiple item lines so we don't silently ignore parts of the request.
+        parsed_items = _parse_request_items(request, qty)
+        total_requested_qty = sum(item["quantity"] for item in parsed_items)
+        # Track cash so we can avoid overspending on restocks.
+        cash_available = get_cash_balance(self.engine, as_of)
+        overall_sale = 0.0
+        overall_restock_spend = 0.0
+        item_results: list[dict[str, Any]] = []
 
-        # Avoid negative inventory by splitting into shippable vs backordered quantities.
-        ship_qty = min(qty, available_stock)
-        backorder_qty = max(0, qty - ship_qty)
+        for item in parsed_items:
+            try:
+                decision = compute_procurement_decision(self.engine, item["request_text"], as_of)
+            except ValueError as exc:
+                item_results.append(
+                    {
+                        "request": item["request_text"],
+                        "error": str(exc),
+                        "requested_quantity": item["quantity"],
+                    }
+                )
+                continue
 
-        sale_receipt = None
-        sale_total = 0.0
-        if ship_qty > 0:
-            if quoted_total is not None:
-                sale_total = _validate_price(quoted_total) * (ship_qty / qty)
-            else:
-                sale_total = unit_price * ship_qty
+            item_name = decision.matched_item
+            item_qty = _validate_positive_int(item["quantity"], "quantity")
+            unit_price = _unit_price(self.engine, item_name)
+            available_stock = max(int(decision.current_stock), 0)
 
-            sale_receipt = record_transaction(
-                self.engine,
-                item_name=item_name,
-                transaction_type="sales",
-                quantity=ship_qty,
-                total_price=sale_total,
-                as_of_date=as_of,
+            ship_qty = min(item_qty, available_stock)
+            backorder_qty = max(0, item_qty - ship_qty)
+
+            sale_receipt = None
+            sale_total = 0.0
+            if ship_qty > 0:
+                if quoted_total is not None and total_requested_qty > 0:
+                    proportional_total = _validate_price(quoted_total) * (item_qty / total_requested_qty)
+                    sale_total = proportional_total * (ship_qty / item_qty)
+                else:
+                    sale_total = unit_price * ship_qty
+
+                sale_receipt = record_transaction(
+                    self.engine,
+                    item_name=item_name,
+                    transaction_type="sales",
+                    quantity=ship_qty,
+                    total_price=sale_total,
+                    as_of_date=as_of,
+                )
+                cash_available += sale_total
+                overall_sale += sale_total
+
+            post_stock = max(0, sale_receipt.resulting_stock if sale_receipt else available_stock)
+            restock_payload = None
+            final_stock = post_stock
+
+            restock_qty = 0
+            # Cover any backordered units and refill to a healthy buffer if low.
+            if backorder_qty > 0:
+                restock_qty = max(restock_qty, backorder_qty + decision.min_stock_level)
+            if post_stock <= decision.min_stock_level:
+                restock_qty = max(
+                    restock_qty, max(decision.min_stock_level * 2 - post_stock, decision.min_stock_level)
+                )
+
+            restock_budget_blocked = False
+            if restock_qty > 0:
+                restock_price = unit_price * restock_qty
+                if restock_price > cash_available:
+                    affordable_units = int(cash_available // max(unit_price, 0.01))
+                    if affordable_units <= 0:
+                        restock_budget_blocked = True
+                        restock_qty = 0
+                    else:
+                        restock_qty = affordable_units
+                        restock_price = unit_price * restock_qty
+                        restock_budget_blocked = True
+
+                if restock_qty > 0:
+                    restock_receipt = record_transaction(
+                        self.engine,
+                        item_name=item_name,
+                        transaction_type="stock_orders",
+                        quantity=restock_qty,
+                        total_price=restock_price,
+                        as_of_date=as_of,
+                    )
+                    restock_eta = get_supplier_delivery_date(as_of, restock_qty)
+                    restock_payload = {
+                        "receipt": _receipt_to_dict(restock_receipt),
+                        "estimated_delivery_date": restock_eta,
+                        "budget_limited": restock_budget_blocked,
+                    }
+                    final_stock = restock_receipt.resulting_stock
+                    cash_available -= restock_price
+                    overall_restock_spend += restock_price
+
+            if sale_receipt:
+                sale_receipt.resulting_stock = final_stock
+            customer_eta = get_supplier_delivery_date(as_of, ship_qty if ship_qty > 0 else backorder_qty or 1)
+
+            item_results.append(
+                {
+                    "request": item["request_text"],
+                    "matched_item": item_name,
+                    "requested_quantity": item_qty,
+                    "shipped_quantity": ship_qty,
+                    "backorder_quantity": backorder_qty,
+                    "sale_price_total": round(sale_total, 2),
+                    "sale_receipt": _receipt_to_dict(sale_receipt) if sale_receipt else None,
+                    "restock": restock_payload,
+                    "customer_eta": customer_eta,
+                    "final_stock": final_stock,
+                    "budget_blocked_restock": restock_budget_blocked,
+                }
             )
 
-        post_stock = max(0, sale_receipt.resulting_stock if sale_receipt else available_stock)
-        restock_payload = None
-        final_stock = post_stock
-
-        restock_qty = 0
-        # Cover any backordered units and refill to a healthy buffer if low.
-        if backorder_qty > 0:
-            restock_qty = max(restock_qty, backorder_qty + decision.min_stock_level)
-        if post_stock <= decision.min_stock_level:
-            restock_qty = max(restock_qty, max(decision.min_stock_level * 2 - post_stock, decision.min_stock_level))
-
-        if restock_qty > 0:
-            restock_price = unit_price * restock_qty
-            restock_receipt = record_transaction(
-                self.engine,
-                item_name=item_name,
-                transaction_type="stock_orders",
-                quantity=restock_qty,
-                total_price=restock_price,
-                as_of_date=as_of,
-            )
-            restock_eta = get_supplier_delivery_date(as_of, restock_qty)
-            restock_payload = {"receipt": _receipt_to_dict(restock_receipt), "estimated_delivery_date": restock_eta}
-            final_stock = restock_receipt.resulting_stock
-
-        if sale_receipt:
-            sale_receipt.resulting_stock = final_stock
-        customer_eta = get_supplier_delivery_date(as_of, ship_qty if ship_qty > 0 else backorder_qty or 1)
-
+        # Provide a backward-compatible summary for downstream formatting.
+        first_item = next((item for item in item_results if not item.get("error")), item_results[0] if item_results else {})
+        eta_values = [item.get("customer_eta") for item in item_results if item.get("customer_eta")]
+        overall_eta = max(eta_values) if eta_values else None
         return {
             "request": request,
-            "matched_item": item_name,
-            "quantity": qty,
-            "shipped_quantity": ship_qty,
-            "backorder_quantity": backorder_qty,
-            "sale_price_total": sale_total,
-            "sale_receipt": _receipt_to_dict(sale_receipt) if sale_receipt else None,
-            "restock": restock_payload,
-            "customer_eta": customer_eta,
+            "matched_item": first_item.get("matched_item"),
+            "quantity": total_requested_qty,
+            "items": item_results,
+            "overall_sale_total": round(overall_sale, 2),
+            "overall_restock_spend": round(overall_restock_spend, 2),
+            "cash_balance_after": round(cash_available, 2),
+            "customer_eta": overall_eta,
         }
 
 

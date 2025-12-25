@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 import pandas as pd
@@ -19,6 +20,9 @@ def _setup_logging():
     if logging.getLogger().handlers:
         return
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    # Surface smolagents tool calls when SMOLAGENTS_TRACE is set.
+    smol_logger = logging.getLogger("smolagents")
+    smol_logger.setLevel(logging.DEBUG if os.environ.get("SMOLAGENTS_TRACE") == "1" else logging.INFO)
 
 
 def initialize_agents(engine=None, model_id: str = "gpt-4o-mini") -> dict:

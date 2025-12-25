@@ -38,6 +38,31 @@ def _resolve_inventory_item(engine: Engine, product_request: str) -> tuple[str, 
     """
     request_text = _validate_nonempty_string(product_request, "product_request")
     request_lower = request_text.lower()
+    # Lightweight synonym mapping to improve matches for common paraphrases.
+    synonyms = {
+        "poster board": "Large poster paper (24x36 inches)",
+        "poster paper": "Large poster paper (24x36 inches)",
+        "banner": "Banner paper",
+        "banner paper": "Banner paper",
+        "rolls of banner": "Rolls of banner paper (36-inch width)",
+        "streamer": "Crepe paper",
+        "streamers": "Crepe paper",
+        "balloon": "Crepe paper",
+        "balloons": "Crepe paper",
+        "flyer": "A4 paper",
+        "flyers": "A4 paper",
+        "napkin": "Paper plates",
+        "napkins": "Paper plates",
+    }
+    for keyword, canonical in synonyms.items():
+        if keyword in request_lower:
+            df = pd.read_sql(
+                "SELECT min_stock_level FROM inventory WHERE item_name = :name LIMIT 1",
+                engine,
+                params={"name": canonical},
+            )
+            if not df.empty:
+                return canonical, int(df.iloc[0]["min_stock_level"])
     inventory_df = pd.read_sql("SELECT item_name, min_stock_level FROM inventory", engine)
     if inventory_df.empty:
         raise ValueError("inventory table is empty; seed data before requesting a match")

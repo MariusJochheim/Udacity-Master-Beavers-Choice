@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any, Dict
 
@@ -39,6 +40,33 @@ def _format_quote_message(quote: Dict[str, Any]) -> str:
 def _format_order_message(order_result: Dict[str, Any]) -> str:
     if "error" in order_result:
         return f"Unable to place order: {order_result.get('error')}"
+    items = order_result.get("items")
+    if isinstance(items, list) and items:
+        placed_parts = []
+        backorders = []
+        for item in items:
+            if item.get("error"):
+                backorders.append(f"{item.get('request')}: {item.get('error')}")
+                continue
+            name = item.get("matched_item") or item.get("request")
+            qty = item.get("shipped_quantity") or item.get("requested_quantity")
+            price = item.get("sale_price_total")
+            eta = item.get("customer_eta") or (item.get("restock") or {}).get("estimated_delivery_date")
+            segment = f"{qty} x {name}"
+            if isinstance(price, (int, float)):
+                segment += f" (${float(price):.2f})"
+            if eta:
+                segment += f" ETA {eta}"
+            placed_parts.append(segment)
+            if item.get("backorder_quantity"):
+                backorders.append(
+                    f"{item.get('matched_item')}: backorder {item.get('backorder_quantity')} (restock pending)"
+                )
+        message = "Orders placed: " + "; ".join(placed_parts) if placed_parts else "Orders processed."
+        if backorders:
+            message += f" Backorders: {'; '.join(backorders)}."
+        return message
+
     item = order_result.get("matched_item") or order_result.get("request")
     sale_receipt = order_result.get("sale_receipt") or {}
     eta = order_result.get("customer_eta") or order_result.get("estimated_delivery_date")
@@ -229,6 +257,7 @@ class OrchestratorAgent(ToolCallingAgent):
         order_agent: OrderExecutionAgent | None = None,
         finance_agent: FinanceAgent | None = None,
         model: Model | None = None,
+        strict_routing: bool = False,
         **kwargs,
     ):
         if model is None:
@@ -242,11 +271,16 @@ class OrchestratorAgent(ToolCallingAgent):
         self.quote_agent = quote_agent
         self.order_agent = order_agent
         self.finance_agent = finance_agent or FinanceAgent(engine=self.engine, model=model)
+        self.strict_routing = strict_routing
 
         quote_tool = QuoteTool(self.quote_agent)
         order_tool = OrderTool(self.order_agent)
         status_tool = StatusTool(self.finance_agent)
         final_tool = FinalAnswerTool()
+        # Retain tool handles for direct routing in strict mode.
+        self.quote_tool = quote_tool
+        self.order_tool = order_tool
+        self.status_tool = status_tool
 
         super().__init__(
             tools=[quote_tool, order_tool, status_tool, final_tool],
@@ -264,6 +298,11 @@ class OrchestratorAgent(ToolCallingAgent):
             **kwargs,
         )
 
+    def run(self, request: str, additional_args: Dict[str, Any] | None = None) -> Any:
+        """Always delegate to smolagents ToolCallingAgent for routing/tool calls."""
+        additional_args = additional_args or {}
+        return super().run(request, additional_args=additional_args)
+
 
 def create_openai_orchestrator_agent(
     quote_agent,
@@ -273,6 +312,7 @@ def create_openai_orchestrator_agent(
     api_base: str | None = None,
     order_agent: OrderExecutionAgent | None = None,
     finance_agent: FinanceAgent | None = None,
+    strict_routing: bool = False,
     **kwargs,
 ) -> OrchestratorAgent:
     """
@@ -293,5 +333,6 @@ def create_openai_orchestrator_agent(
         order_agent=order_agent,
         finance_agent=finance_agent,
         model=model,
+        strict_routing=strict_routing,
         **kwargs,
     )

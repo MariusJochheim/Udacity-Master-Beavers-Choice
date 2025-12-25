@@ -162,6 +162,8 @@ class QuotePricingTool(Tool):
         size_factor = _size_factor(order_size)
         markup_rate = self._restock_markup(availability)
         adjusted_total = round(anchor_price * size_factor * (1 + markup_rate), 2)
+        if adjusted_total < 5.0:
+            adjusted_total = 5.0
 
         explanation_parts: list[str] = []
         if history_used:
