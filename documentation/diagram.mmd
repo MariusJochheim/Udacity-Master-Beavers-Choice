@@ -1,0 +1,75 @@
+flowchart LR
+
+  %% ========= EXTERNAL ACTORS =========
+  Customer([Customer])
+  Supplier([Paper Supplier])
+  Payment([Payment Gateway])
+  Shipping([Shipping / Logistics])
+
+  %% ========= AGENTS =========
+  subgraph System[Multi-Agent Inventory & Quoting System]
+    Orchestrator["Orchestrator Agent"]
+    InvAgent["Inventory Agent"]
+    QuoteAgent["Quoting Agent"]
+    OrderAgent["Order Fulfillment Agent"]
+  end
+
+  %% ========= DATA / TOOLS =========
+  subgraph DataStores[Internal Databases]
+    InvDB[(Inventory DB)]
+    OrderDB[(Order & Customer DB)]
+    QuoteHist[(Quote History DB)]
+  end
+
+  subgraph Tools[Internal Tools]
+    PricingTool["Pricing & Discount Engine"]
+    LeadTimeTool["Supplier Lead-Time Tool"]
+    ReorderTool["Replenishment / PO Tool"]
+    FulfillTool["Order Fulfillment Tool"]
+    NotifyTool["Notification Tool"]
+  end
+
+  %% ========= CUSTOMER FLOW =========
+  Customer -->|1. Inquiry| Orchestrator
+  Orchestrator -->|2. Validate Request| Orchestrator
+
+  %% ========= INVENTORY FLOW =========
+  Orchestrator -->|3. Check Availability| InvAgent
+  InvAgent --> InvDB
+  InvDB --> InvAgent
+  InvAgent -->|Supplier Timing| LeadTimeTool
+  LeadTimeTool --> InvAgent
+  InvAgent -->|Reorder if Needed| ReorderTool
+  InvAgent -->|4. Availability Result| Orchestrator
+
+  %% ========= QUOTE FLOW =========
+  Orchestrator -->|5. Request Quote| QuoteAgent
+  QuoteAgent --> QuoteHist
+  QuoteAgent --> PricingTool
+  PricingTool --> QuoteAgent
+  QuoteHist --> QuoteAgent
+  QuoteAgent -->|6. Quote Details| Orchestrator
+
+  %% ========= RETURN QUOTE =========
+  Orchestrator -->|7. Send Quote| Customer
+  Customer -->|8. Accept / Modify / Reject| Orchestrator
+
+  %% ========= ORDER FLOW =========
+  Orchestrator -->|9. Create Order| OrderAgent
+  OrderAgent -->|Reserve Stock| FulfillTool
+  FulfillTool --> InvDB
+  FulfillTool --> OrderDB
+
+  OrderAgent --> Payment
+  Payment --> OrderAgent
+
+  OrderAgent --> Shipping
+  Shipping --> OrderAgent
+
+  OrderAgent --> NotifyTool
+  NotifyTool --> Customer
+  NotifyTool --> Orchestrator
+
+  %% ========= FEEDBACK =========
+  OrderAgent --> QuoteHist
+  InvAgent --> InvDB
