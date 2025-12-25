@@ -1,0 +1,1 @@
+"""BeaversChoice core package."""
