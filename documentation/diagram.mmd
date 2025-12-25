@@ -4,47 +4,50 @@ flowchart LR
   Customer([Customer])
 
   %% ========= AGENTS =========
-  subgraph Agents[Planned Agent Team]
-    Orchestrator["Orchestrator Agent"]
-    InventoryAgent["Inventory & Procurement Agent"]
-    QuoteAgent["Pricing & Quote Agent"]
-    OrderAgent["Order Execution Agent"]
-    FinanceAgent["Finance Agent"]
+  subgraph Agents[Agent Team]
+    Orchestrator["Orchestrator Agent<br/>(quote_request · order_request · status_snapshot)"]
+    InventoryAgent["Inventory & Procurement Agent<br/>(inventory_procurement · inventory_snapshot)"]
+    QuoteAgent["Quote Agent<br/>(prepare_quote)"]
+    OrderAgent["Order Execution Agent<br/>(execute_order)"]
+    FinanceAgent["Finance Agent<br/>(financial_snapshot)"]
   end
 
   %% ========= TOOLS / DATA =========
-  subgraph Tools[Available Tools]
-    InventoryTools["get_all_inventory()<br/>get_stock_level()"]
-    QuoteHistory["search_quote_history()"]
+  subgraph Tools[Core Functions & Data]
+    QuoteHistory["recent_quote_history()"]
+    Procurement["compute_procurement_decision()"]
+    InventorySnapshot["get_all_inventory()<br/>get_stock_level()"]
+    RecordTxn["record_transaction()<br/>create_transaction()"]
     DeliveryETA["get_supplier_delivery_date()"]
-    Transactions["create_transaction()"]
     FinReport["generate_financial_report()"]
-    DB[(SQLite DB:<br/>transactions,<br/>inventory,<br/>quote_requests,<br/>quotes)]
+    DB[(SQLite DB:<br/>inventory,<br/>transactions,<br/>quote_requests,<br/>quotes)]
   end
 
-  DB <--> InventoryTools
   DB <--> QuoteHistory
-  DB <--> Transactions
+  DB <--> Procurement
+  DB <--> InventorySnapshot
+  DB <--> RecordTxn
   DB <--> FinReport
+  Procurement --> DeliveryETA
 
   %% ========= REQUEST HANDLING =========
   Customer -->|Request| Orchestrator
-  Orchestrator -->|Context + intent| QuoteAgent
-  QuoteAgent -->|Pricing anchors| QuoteHistory
-  QuoteAgent -->|Stock check| InventoryAgent
-  InventoryAgent --> InventoryTools
-  InventoryAgent --> DeliveryETA
-  InventoryAgent -->|Restock recommendations| Orchestrator
-  QuoteAgent -->|Quote & availability| Orchestrator
+  Orchestrator -->|quote_request| QuoteAgent
+  QuoteAgent -->|History anchors| QuoteHistory
+  QuoteAgent -->|Availability check| InventoryAgent
+  InventoryAgent -->|Procurement guidance| Procurement
+  InventoryAgent -->|Inventory state| InventorySnapshot
+  InventoryAgent -->|Delivery ETA| DeliveryETA
+  QuoteAgent -->|Quote + availability| Orchestrator
 
   %% ========= ORDERING & FULFILLMENT =========
-  Orchestrator -->|Approved sale| OrderAgent
-  OrderAgent -->|Record sale| Transactions
-  OrderAgent -->|Replenish if needed| Transactions
+  Orchestrator -->|order_request| OrderAgent
+  OrderAgent -->|Match item & stock| Procurement
+  OrderAgent -->|Record sale/restock| RecordTxn
   OrderAgent -->|Customer ETA| DeliveryETA
 
   %% ========= REPORTING =========
-  Orchestrator -->|Status snapshot| FinanceAgent
+  Orchestrator -->|status_snapshot| FinanceAgent
   FinanceAgent --> FinReport
   FinReport --> Orchestrator
 
