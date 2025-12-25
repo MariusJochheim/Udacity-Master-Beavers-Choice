@@ -78,22 +78,41 @@ class ExecuteOrderTool(Tool):
             return {"error": str(exc), "request": request, "quantity": qty, "as_of_date": as_of}
         item_name = decision.matched_item
         unit_price = _unit_price(self.engine, item_name)
-        sale_total = _validate_price(quoted_total) if quoted_total is not None else unit_price * qty
+        available_stock = max(int(decision.current_stock), 0)
 
-        sale_receipt = record_transaction(
-            self.engine,
-            item_name=item_name,
-            transaction_type="sales",
-            quantity=qty,
-            total_price=sale_total,
-            as_of_date=as_of,
-        )
+        # Avoid negative inventory by splitting into shippable vs backordered quantities.
+        ship_qty = min(qty, available_stock)
+        backorder_qty = max(0, qty - ship_qty)
 
-        post_stock = max(0, sale_receipt.resulting_stock)
+        sale_receipt = None
+        sale_total = 0.0
+        if ship_qty > 0:
+            if quoted_total is not None:
+                sale_total = _validate_price(quoted_total) * (ship_qty / qty)
+            else:
+                sale_total = unit_price * ship_qty
+
+            sale_receipt = record_transaction(
+                self.engine,
+                item_name=item_name,
+                transaction_type="sales",
+                quantity=ship_qty,
+                total_price=sale_total,
+                as_of_date=as_of,
+            )
+
+        post_stock = max(0, sale_receipt.resulting_stock if sale_receipt else available_stock)
         restock_payload = None
         final_stock = post_stock
+
+        restock_qty = 0
+        # Cover any backordered units and refill to a healthy buffer if low.
+        if backorder_qty > 0:
+            restock_qty = max(restock_qty, backorder_qty + decision.min_stock_level)
         if post_stock <= decision.min_stock_level:
-            restock_qty = max(decision.min_stock_level * 2 - post_stock, decision.min_stock_level)
+            restock_qty = max(restock_qty, max(decision.min_stock_level * 2 - post_stock, decision.min_stock_level))
+
+        if restock_qty > 0:
             restock_price = unit_price * restock_qty
             restock_receipt = record_transaction(
                 self.engine,
@@ -107,16 +126,18 @@ class ExecuteOrderTool(Tool):
             restock_payload = {"receipt": _receipt_to_dict(restock_receipt), "estimated_delivery_date": restock_eta}
             final_stock = restock_receipt.resulting_stock
 
-        # Update sale receipt to reflect final stock after any replenishment so callers see the ending state.
-        sale_receipt.resulting_stock = final_stock
-        customer_eta = get_supplier_delivery_date(as_of, qty)
+        if sale_receipt:
+            sale_receipt.resulting_stock = final_stock
+        customer_eta = get_supplier_delivery_date(as_of, ship_qty if ship_qty > 0 else backorder_qty or 1)
 
         return {
             "request": request,
             "matched_item": item_name,
             "quantity": qty,
+            "shipped_quantity": ship_qty,
+            "backorder_quantity": backorder_qty,
             "sale_price_total": sale_total,
-            "sale_receipt": _receipt_to_dict(sale_receipt),
+            "sale_receipt": _receipt_to_dict(sale_receipt) if sale_receipt else None,
             "restock": restock_payload,
             "customer_eta": customer_eta,
         }
