@@ -71,7 +71,11 @@ class ExecuteOrderTool(Tool):
         qty = _validate_positive_int(quantity or 1, "quantity")
         as_of = _normalize_date_input(as_of_date or datetime.now(), "as_of_date")
 
-        decision = compute_procurement_decision(self.engine, request, as_of)
+        try:
+            decision = compute_procurement_decision(self.engine, request, as_of)
+        except ValueError as exc:
+            # Return a structured error payload so callers can surface a graceful message.
+            return {"error": str(exc), "request": request, "quantity": qty, "as_of_date": as_of}
         item_name = decision.matched_item
         unit_price = _unit_price(self.engine, item_name)
         sale_total = _validate_price(quoted_total) if quoted_total is not None else unit_price * qty
@@ -128,27 +132,40 @@ class FinalAnswerTool(Tool):
 
     def forward(self, answer: Any) -> Any:
         # Smolagents sometimes wraps tool results in text chunks; unwrap when possible.
+        def _parse_text_payload(text: str) -> Any:
+            if "Observation:" in text:
+                text = text.split("Observation:", 1)[1].strip()
+            stripped = text.strip()
+            if stripped.startswith("{") and stripped.endswith("}"):
+                import ast
+
+                try:
+                    return ast.literal_eval(stripped)
+                except Exception:
+                    return stripped
+            return stripped
+
         if isinstance(answer, list):
             text_parts = []
             for item in answer:
                 if isinstance(item, dict) and "text" in item:
                     text_parts.append(str(item["text"]))
+                elif isinstance(item, str):
+                    text_parts.append(item)
             if text_parts:
-                joined = " ".join(text_parts)
-                # Attempt to parse out a dict payload if the text is a stringified observation.
-                import ast
-
-                for text in text_parts:
-                    if "{" in text and "Observation:" in text:
-                        try:
-                            observed = text.split("Observation:", 1)[1].strip()
-                            return ast.literal_eval(observed)
-                        except Exception:
-                            continue
-                return joined
+                parsed = [_parse_text_payload(part) for part in text_parts]
+                for candidate in parsed:
+                    if isinstance(candidate, dict):
+                        return candidate
+                return " ".join(str(part) for part in parsed)
 
         if isinstance(answer, dict) and "text" in answer:
-            return str(answer["text"])
+            return _parse_text_payload(str(answer["text"]))
+
+        if isinstance(answer, str):
+            parsed = _parse_text_payload(answer)
+            return parsed
+
         return answer
 
 
@@ -163,6 +180,7 @@ class OrderExecutionAgent(ToolCallingAgent):
             raise ValueError("An LLM model must be provided to OrderExecutionAgent")
 
         execute_tool = ExecuteOrderTool(engine=self.engine)
+        self.execute_tool = execute_tool
         final_tool = FinalAnswerTool()
 
         super().__init__(
@@ -171,9 +189,9 @@ class OrderExecutionAgent(ToolCallingAgent):
             add_base_tools=False,
             max_tool_threads=1,
             instructions=(
-                "You are the Order Execution agent. Always call the execute_order tool once using the customer's "
-                "request text, order quantity, as_of_date, and quoted_total when provided. Return the tool result "
-                "via final_answer."
+                "You are the Order Execution agent. Call the execute_order tool exactly once using the customer's "
+                "request text, order quantity, as_of_date, and quoted_total when provided. Pass the tool's JSON "
+                "result directly to final_answer without rephrasing."
             ),
             **kwargs,
         )

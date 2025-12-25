@@ -86,10 +86,36 @@ class QuotePricingTool(Tool):
         return average, [asdict(entry) for entry in history]
 
     def _run_inventory_agent(self, request_text: str, as_of_date: str) -> Dict:
+        def _parse_candidate(value: Any) -> Dict | None:
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                text = value
+                if "Observation:" in text:
+                    text = text.split("Observation:", 1)[1].strip()
+                stripped = text.strip()
+                if stripped.startswith("{") and stripped.endswith("}"):
+                    import ast
+
+                    try:
+                        parsed = ast.literal_eval(stripped)
+                        if isinstance(parsed, dict):
+                            return parsed
+                    except Exception:
+                        return None
+            if isinstance(value, list):
+                for item in value:
+                    parsed = _parse_candidate(item)
+                    if isinstance(parsed, dict):
+                        return parsed
+            return None
+
         availability = self.inventory_agent.run(request_text, additional_args={"as_of_date": as_of_date})
-        if not isinstance(availability, dict):
-            raise ValueError("inventory agent response must be a dictionary")
-        return availability
+        parsed = _parse_candidate(availability)
+        if parsed is None:
+            # Fall back to wrapping the raw response so downstream logic can still proceed.
+            return {"raw_response": availability}
+        return parsed
 
     def _restock_markup(self, availability: Dict) -> float:
         if availability.get("restock_recommended"):
@@ -117,6 +143,22 @@ class QuotePricingTool(Tool):
         anchor_price, history_used = self._anchor_price(search_terms)
 
         availability = self._run_inventory_agent(request, as_of)
+        if availability.get("error"):
+            return {
+                "error": availability["error"],
+                "request": request,
+                "as_of_date": as_of,
+                "availability": availability,
+                "metadata": {
+                    key: value
+                    for key, value in {
+                        "job_type": job_type,
+                        "order_size": order_size,
+                        "event_type": event_type,
+                    }.items()
+                    if isinstance(value, str) and value.strip()
+                },
+            }
         size_factor = _size_factor(order_size)
         markup_rate = self._restock_markup(availability)
         adjusted_total = round(anchor_price * size_factor * (1 + markup_rate), 2)
@@ -171,20 +213,23 @@ class FinalAnswerTool(Tool):
         def _parse_text_payload(text: str) -> Any:
             if "Observation:" in text:
                 text = text.split("Observation:", 1)[1].strip()
-            if text.strip().startswith("{") and text.strip().endswith("}"):
+            stripped = text.strip()
+            if stripped.startswith("{") and stripped.endswith("}"):
                 import ast
 
                 try:
-                    return ast.literal_eval(text)
+                    return ast.literal_eval(stripped)
                 except Exception:
-                    return text
-            return text
+                    return stripped
+            return stripped
 
         if isinstance(answer, list):
             text_parts = []
             for item in answer:
                 if isinstance(item, dict) and "text" in item:
                     text_parts.append(str(item["text"]))
+                elif isinstance(item, str):
+                    text_parts.append(item)
             if text_parts:
                 parsed = [_parse_text_payload(part) for part in text_parts]
                 for candidate in parsed:
@@ -219,8 +264,9 @@ class QuoteAgent(ToolCallingAgent):
             add_base_tools=False,
             max_tool_threads=1,
             instructions=(
-                "You are the Quote agent. Call prepare_quote once using the customer's request text, as_of_date, "
-                "order_size, job_type, and event_type when available. Return the tool result via final_answer."
+                "You are the Quote agent. Call prepare_quote exactly once using the customer's request text, "
+                "as_of_date, order_size, job_type, and event_type when available. Pass the tool's JSON result "
+                "directly to final_answer without rephrasing or summarizing."
             ),
             **kwargs,
         )
@@ -248,28 +294,20 @@ class QuoteAgent(ToolCallingAgent):
             "event_type": request_payload.get("event_type"),
         }
 
-        result = self.run(request_text, additional_args=arguments)
-        if isinstance(result, list):
-            for item in result:
-                if isinstance(item, dict):
-                    return item
-                if isinstance(item, str) and item.strip().startswith("{"):
-                    import ast
-
-                    try:
-                        return ast.literal_eval(item)
-                    except Exception:
-                        continue
+        # Call the pricing tool directly to avoid LLM paraphrasing that breaks downstream parsing.
+        result = self.quote_tool.forward(**arguments)
         if isinstance(result, dict):
             return result
         if isinstance(result, str) and result.strip().startswith("{"):
             import ast
 
             try:
-                return ast.literal_eval(result)
+                parsed = ast.literal_eval(result)
+                if isinstance(parsed, dict):
+                    return parsed
             except Exception:
                 pass
-        raise ValueError("QuoteAgent must return a dictionary payload")
+        return {"raw_response": result, "request": request_text, "as_of_date": as_of_date}
 
 
 def create_openai_quote_agent(

@@ -32,8 +32,16 @@ class ProcurementTool(Tool):
         self.engine = engine or get_engine()
 
     def forward(self, product_request: str, as_of_date: str | None = None) -> dict:
-        decision = compute_procurement_decision(self.engine, product_request, as_of_date or datetime.now().isoformat())
-        return decision.to_dict()
+        try:
+            decision = compute_procurement_decision(self.engine, product_request, as_of_date or datetime.now().isoformat())
+            return decision.to_dict()
+        except ValueError as exc:
+            # Return structured error instead of raising so callers can gracefully respond.
+            return {
+                "error": str(exc),
+                "request": product_request,
+                "as_of_date": as_of_date or datetime.now().isoformat(),
+            }
 
 
 class FinalAnswerTool(Tool):
@@ -45,6 +53,38 @@ class FinalAnswerTool(Tool):
     output_type = "any"
 
     def forward(self, answer: Any) -> Any:
+        # Smolagents can wrap tool results in text chunks; unwrap and prefer dict payloads.
+        def _parse_text_payload(text: str) -> Any:
+            if "Observation:" in text:
+                text = text.split("Observation:", 1)[1].strip()
+            stripped = text.strip()
+            if stripped.startswith("{") and stripped.endswith("}"):
+                import ast
+
+                try:
+                    return ast.literal_eval(stripped)
+                except Exception:
+                    return stripped
+            return stripped
+
+        if isinstance(answer, list):
+            text_parts = []
+            for item in answer:
+                if isinstance(item, dict) and "text" in item:
+                    text_parts.append(str(item["text"]))
+                elif isinstance(item, str):
+                    text_parts.append(item)
+            if text_parts:
+                parsed = [_parse_text_payload(part) for part in text_parts]
+                for candidate in parsed:
+                    if isinstance(candidate, dict):
+                        return candidate
+                return " ".join(str(part) for part in parsed)
+
+        if isinstance(answer, dict) and "text" in answer:
+            parsed = _parse_text_payload(str(answer["text"]))
+            return parsed
+
         return answer
 
 
@@ -68,8 +108,9 @@ class InventoryProcurementAgent(ToolCallingAgent):
             add_base_tools=False,
             max_tool_threads=1,
             instructions=(
-                "You are the Inventory & Procurement agent. Always call the inventory_procurement tool with the "
-                "customer request text and date (as_of_date). Respond only with the tool result."
+                "You are the Inventory & Procurement agent. Call the inventory_procurement tool exactly once with the "
+                "customer request text and as_of_date. Pass the tool's JSON result directly to final_answer without "
+                "summaries or rephrasing."
             ),
             **kwargs,
         )

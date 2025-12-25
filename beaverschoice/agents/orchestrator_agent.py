@@ -15,6 +15,8 @@ from beaverschoice.tooling import _normalize_date_input, _validate_nonempty_stri
 
 
 def _format_quote_message(quote: Dict[str, Any]) -> str:
+    if "error" in quote:
+        return f"Unable to prepare quote: {quote.get('error')}"
     pricing = quote.get("pricing", {})
     total = pricing.get("total")
     currency = pricing.get("currency", "USD")
@@ -35,6 +37,8 @@ def _format_quote_message(quote: Dict[str, Any]) -> str:
 
 
 def _format_order_message(order_result: Dict[str, Any]) -> str:
+    if "error" in order_result:
+        return f"Unable to place order: {order_result.get('error')}"
     item = order_result.get("matched_item") or order_result.get("request")
     sale_receipt = order_result.get("sale_receipt") or {}
     eta = order_result.get("customer_eta") or order_result.get("estimated_delivery_date")
@@ -121,15 +125,41 @@ class OrderTool(Tool):
 
     def forward(self, request_text: str, as_of_date: str | None = None, quantity: int | None = None, quoted_total: float | None = None) -> str:
         request = _validate_nonempty_string(request_text, "request_text")
-        payload = {
+        payload: Dict[str, Any] = {
             "request_text": request,
             "as_of_date": _normalize_date_input(as_of_date or datetime.now(), "as_of_date"),
             "quantity": quantity,
             "quoted_total": quoted_total,
         }
-        order_result = self.order_agent.run(request, additional_args=payload)
-        if not isinstance(order_result, dict):
-            raise ValueError("order execution agent must return a dictionary payload")
+        # Prefer direct tool call to avoid LLM paraphrasing that can drop structure.
+        try:
+            if hasattr(self.order_agent, "execute_tool"):
+                order_result = self.order_agent.execute_tool.forward(**payload)
+            else:
+                order_result = self.order_agent.run(request, additional_args=payload)
+        except Exception as exc:
+            order_result = {"error": str(exc), "request": request}
+
+        def _coerce_dict(value: Any) -> Dict[str, Any]:
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str) and value.strip().startswith("{"):
+                import ast
+
+                try:
+                    parsed = ast.literal_eval(value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
+            if isinstance(value, list):
+                for item in value:
+                    parsed = _coerce_dict(item)
+                    if isinstance(parsed, dict):
+                        return parsed
+            return {"raw_response": value}
+
+        order_result = _coerce_dict(order_result)
         return _format_order_message(order_result)
 
 
