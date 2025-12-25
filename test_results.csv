@@ -1,0 +1,93 @@
+request_id,request_date,cash_balance,inventory_value,response
+1,2025-04-01,45059.7,4940.299999999999,"Your order for paper supplies for the ceremony has been successfully placed:
+- 200 sheets of A4 glossy paper - $126.00
+- 100 sheets of heavy cardstock (white) - $126.00
+- 100 sheets of colored paper (assorted colors) - $126.00
+
+All items are scheduled to be delivered by April 1, 2025."
+2,2025-04-03,45437.7,4939.849999999999,"Your order for 500 sheets of colorful poster paper, 300 rolls of streamers, and 200 balloons for the parade has been successfully placed. The total cost is $126.00, and the estimated delivery date is April 15, 2025. Thank you!"
+3,2025-04-04,45563.7,4938.849999999999,"Order Confirmation:
+
+- A4 Paper: 10,000 sheets ordered, with 10,228 sheets placed and an ETA of April 11, 2025. 
+- A3 Paper: 5,000 sheets ordered, awaiting confirmation and ETA.
+- Printer Paper: 500 reams ordered, awaiting confirmation and ETA.
+
+Please note that some items are backordered."
+4,2025-04-05,45066.0,4938.749999999999,"Order confirmed for 500 sheets of high-quality, recycled cardstock and 250 sheets of A4 size printer paper. Both orders will be delivered by April 9, 2025."
+5,2025-04-05,45066.0,4938.749999999999,"Your order has been successfully placed:
+- 296 sheets of cardstock (backordered 4 sheets) - ETA: 2025-04-09 - Total: $44.40
+- 200 rolls of decorative washi tape - Total: $500.00
+- 500 sheets of 8.5""x11"" colored paper - Total: $50.00
+
+The items will be delivered by April 9, 2025, except for the cardstock which is still pending restock."
+6,2025-04-06,45837.7,3719.0499999999997,"Orders placed:
+- 500 sheets of colorful construction paper - ETA 2025-04-10
+- 300 sheets of white printer paper - ETA 2025-04-10
+- 200 sheets of cardstock in various colors - ETA 2025-04-10"
+7,2025-04-07,44990.200000000004,4566.549999999999,"Orders placed:
+- 270 x A4 paper ($13.50) ETA 2025-04-11 (Backorder: 230 sheets pending)
+- 300 x Large poster paper (24x36 inches) ($300.00) ETA 2025-04-11
+- 200 x Cardstock ($30.00) ETA 2025-04-11
+- 435 x Rolls of banner paper (36-inch width) ($1087.50) ETA 2025-04-11 (Backorder: 565 rolls pending)"
+8,2025-04-07,44990.200000000004,4566.549999999999,"Your order has been successfully placed:
+
+- 287 sheets of A5 colored paper ($28.70) - ETA 2025-04-11 (Backordered: 1713 sheets, restock pending)
+- 500 sheets of A4 glossy paper ($100.00) - ETA 2025-04-11
+- 630 rolls of banner paper (36-inch width) - ETA 2025-04-11 (Backordered: 370 rolls, restock pending)
+- 435 rolls of banner paper (36-inch width) - ETA 2025-04-11 (Backordered: 2565 rolls, restock pending)
+
+Thank you for your order!"
+9,2025-04-07,44990.200000000004,4566.549999999999,"Your order has been successfully placed for the following items:
+- 200 sheets of A4 white printer paper (ETA 2025-04-11, $500.00)
+- 100 sheets of A3 glossy paper (ETA 2025-04-08, $20.00)
+- 50 packets of 100% recycled kraft paper envelopes (ETA 2025-04-08, $5.00)
+
+Thank you for your order!"
+13,2025-04-08,40224.450000000004,9332.300000000001,"Order placed for 500 sheets of A4 printing paper with ETA by April 12, 2025. The order includes 200 sheets of cardstock, of which 152 have been successfully ordered, with a backorder of 48 sheets pending. Total amount for the order is $156.00 USD."
+12,2025-04-08,40224.450000000004,9332.300000000001,"Orders placed: 500 x Rolls of banner paper (36-inch width) - $0.00, ETA 2025-04-12; 200 x Cardstock - $30.00, ETA 2025-04-12; 100 x Paper plates - $10.00, ETA 2025-04-09."
+10,2025-04-08,40224.450000000004,9332.300000000001,"Orders placed for 194 sheets of glossy paper. ETA is 2025-04-12. However, there are backorders for 606 sheets of glossy paper pending restock. The order for 300 sheets of cardstock has been successfully placed."
+11,2025-04-08,40224.450000000004,9332.300000000001,"Orders for 500 sheets of A3 glossy paper and 300 sheets of A4 matte paper have been placed. The glossy paper order is 753 sheets with an ETA of 2025-04-12, but there is a backorder of 47 sheets pending restock. The total cost is $118.60."
+14,2025-04-09,41587.8475,5582.299999999999,"Order placed for high-quality paper supplies. 398 sheets of large poster paper ordered with an ETA of 2025-04-13; however, there is a backorder for 4602 sheets (restock pending). Please note that the order does not fully cover your request for 2,000 sheets of poster paper."
+15,2025-04-12,36905.4443,9875.300000000001,"To fulfill your order for high-quality paper supplies for your upcoming demonstration, here are the details for the requested items:
+
+1. **10,000 sheets of A4 white paper** - This will be ordered immediately.
+2. **5,000 sheets of A3 colored paper (assorted colors)** - This will also be ordered immediately.
+3. **500 reams of cardboard for signage** - This will be ordered immediately.
+
+The supplies will be requested for delivery by April 15, 2025. 
+
+I will now process these orders. Please hold on as I place them."
+16,2025-04-13,4832.095239999937,22162.100000000002,"Order placed for 500 sheets of A4 printer paper, 200 sheets of colorful construction paper, and 100 sheets of poster board. Total cost: $126.00. Expected delivery by April 13, 2025, in time for your assembly event."
+17,2025-04-14,4958.095239999937,22161.100000000002,"It seems there are existing orders and backorders for several items, particularly paper plates and rolls of banner paper. Here's how we can proceed with your request to place a medium order for the supplies needed for your upcoming reception:
+
+1. **1000 sheets of A4 white printer paper** - We will place this order as there are currently no existing orders for this item.
+   
+2. **500 sheets of A3 colored paper (assorted colors)** - We will place this order as there are currently no existing orders for this item.
+
+3. **2000 table napkins (white)** - We will place this order as well, as it is still needed alongside existing supplies.
+
+4. **1000 paper cups (biodegradable)** - We will place this order since it is not currently on order.
+
+5. **500 paper plates (biodegradable)** - Given the existing orders and backorders for paper plates, we will place this order, but please be aware that there are delays in receiving paper plates.
+
+I will now proceed to place the order for the items listed above, ensuring delivery by April 15, 2025. 
+
+### Summary of the Order:
+- **1000 sheets of A4 white printer paper**
+- **500 sheets of A3 colored paper (assorted colors)**
+- **2000 table napkins (white)**
+- **1000 paper cups (biodegradable)**
+- **500 paper plates (biodegradable)**
+
+Please note that some items may face delays due to backorders on paper plates."
+18,2025-04-14,4958.095239999937,22161.100000000002,"Orders placed: 296 x Cardstock ($44.40) ETA 2025-04-18 (Backorder: 204 pending)
+Orders placed: 200 x Colored paper ($20.00) ETA 2025-04-18
+Orders placed: 277 x Rolls of banner paper (36-inch width) ($692.50) ETA 2025-04-18 (Backorder: 723 pending)"
+19,2025-04-15,17495.69523999997,9623.5,"Your order for paper supplies has been placed. Details are as follows:
+
+- **2000 sheets of A4 glossy paper**: 294 sheets will arrive by April 19, 2025; the remaining 4206 sheets are backordered and pending restock.
+- **1500 sheets of A3 matte paper**: Order placed.
+- **1000 sheets of cardstock in assorted colors**: Order placed.
+
+If you have any further questions or need assistance, please let us know!"
+20,2025-04-17,16632.935239999963,10435.300000000001,"Your order for 5,000 flyers, 2,000 posters, and 10,000 tickets has been placed successfully. The estimated time of arrival (ETA) for the delivery is April 21, 2025. Please note that there are backorders for the A4 paper, with a pending restock of 19,635 units."

@@ -1,6 +1,5 @@
 .venv
 munder_difflin.db
 __pycache__
-test_results.csv
 .vscode
 .env
