@@ -8,9 +8,10 @@ from smolagents.models import Model, OpenAIModel
 from smolagents.tools import Tool
 
 from beaverschoice.config import OPENAI_API_KEY, OPENAI_BASE_URL
+from beaverschoice.agents.finance_agent import FinanceAgent, create_openai_finance_agent
 from beaverschoice.agents.order_execution_agent import OrderExecutionAgent, create_openai_order_execution_agent
 from beaverschoice.db import get_engine
-from beaverschoice.tooling import _normalize_date_input, _validate_nonempty_string, summarize_financials
+from beaverschoice.tooling import _normalize_date_input, _validate_nonempty_string
 
 
 def _format_quote_message(quote: Dict[str, Any]) -> str:
@@ -59,22 +60,6 @@ def _format_status_message(status_result: Dict[str, Any]) -> str:
     if isinstance(cash, (int, float)) and isinstance(inventory_value, (int, float)):
         base += f" Cash ${cash:.2f}, Inventory ${inventory_value:.2f}."
     return base
-
-
-class FinanceStatusAgent:
-    """Lightweight facade around financial reporting."""
-
-    def __init__(self, engine=None):
-        self.engine = engine or get_engine()
-
-    def status_snapshot(self, as_of_date: str) -> Dict[str, Any]:
-        report = summarize_financials(self.engine, as_of_date)
-        return {
-            "as_of_date": report.as_of_date,
-            "cash_balance": report.cash_balance,
-            "inventory_value": report.inventory_value,
-            "top_selling_products": report.top_selling_products,
-        }
 
 
 class QuoteTool(Tool):
@@ -149,21 +134,32 @@ class OrderTool(Tool):
 
 
 class StatusTool(Tool):
-    """Tool that returns a financial status snapshot."""
+    """Tool that returns a financial status snapshot via the FinanceAgent."""
 
     name = "status_snapshot"
     description = "Return current financial and inventory status as of a date."
     inputs = {"as_of_date": {"type": "string", "description": "ISO date to evaluate the status", "nullable": True}}
     output_type = "string"
 
-    def __init__(self, finance_agent: FinanceStatusAgent):
+    def __init__(self, finance_agent: FinanceAgent):
         super().__init__()
+        if finance_agent is None:
+            raise ValueError("finance_agent is required for status flows")
         self.finance_agent = finance_agent
 
     def forward(self, as_of_date: str | None = None) -> str:
         date = _normalize_date_input(as_of_date or datetime.now(), "as_of_date")
-        status = self.finance_agent.status_snapshot(date)
-        return _format_status_message(status)
+        if hasattr(self.finance_agent, "status_snapshot"):
+            status = self.finance_agent.status_snapshot(date)
+            return _format_status_message(status)
+
+        result = self.finance_agent.run("Provide a finance status snapshot", additional_args={"as_of_date": date})
+        if isinstance(result, dict):
+            if "summary" in result:
+                return str(result["summary"])
+            if "report" in result:
+                return _format_status_message(result["report"])
+        return str(result)
 
 
 class FinalAnswerTool(Tool):
@@ -201,7 +197,7 @@ class OrchestratorAgent(ToolCallingAgent):
         engine=None,
         quote_agent=None,
         order_agent: OrderExecutionAgent | None = None,
-        finance_agent: FinanceStatusAgent | None = None,
+        finance_agent: FinanceAgent | None = None,
         model: Model | None = None,
         **kwargs,
     ):
@@ -215,7 +211,7 @@ class OrchestratorAgent(ToolCallingAgent):
         self.engine = engine or get_engine()
         self.quote_agent = quote_agent
         self.order_agent = order_agent
-        self.finance_agent = finance_agent or FinanceStatusAgent(self.engine)
+        self.finance_agent = finance_agent or FinanceAgent(engine=self.engine, model=model)
 
         quote_tool = QuoteTool(self.quote_agent)
         order_tool = OrderTool(self.order_agent)
@@ -246,7 +242,7 @@ def create_openai_orchestrator_agent(
     api_key: str | None = None,
     api_base: str | None = None,
     order_agent: OrderExecutionAgent | None = None,
-    finance_agent: FinanceStatusAgent | None = None,
+    finance_agent: FinanceAgent | None = None,
     **kwargs,
 ) -> OrchestratorAgent:
     """
@@ -259,6 +255,7 @@ def create_openai_orchestrator_agent(
 
     model = OpenAIModel(model_id=model_id, api_key=api_key, api_base=api_base)
     order_agent = order_agent or create_openai_order_execution_agent(engine=engine, model_id=model_id, api_key=api_key, api_base=api_base)
+    finance_agent = finance_agent or create_openai_finance_agent(engine=engine, model_id=model_id, api_key=api_key, api_base=api_base)
 
     return OrchestratorAgent(
         engine=engine,

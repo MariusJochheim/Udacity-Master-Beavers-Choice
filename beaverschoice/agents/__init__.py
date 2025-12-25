@@ -10,8 +10,12 @@ from .order_execution_agent import (  # noqa: F401
     create_openai_order_execution_agent,
 )
 from .orchestrator_agent import (  # noqa: F401
-    FinanceStatusAgent,
     OrchestratorAgent,
     create_openai_orchestrator_agent,
 )
 from .quote_agent import QuoteAgent  # noqa: F401
+from .finance_agent import (  # noqa: F401
+    FinanceAgent,
+    FinancialReportTool,
+    create_openai_finance_agent,
+)
