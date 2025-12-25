@@ -10,6 +10,8 @@ from smolagents.tools import Tool
 from beaverschoice.config import OPENAI_API_KEY, OPENAI_BASE_URL
 from beaverschoice.db import get_engine
 from beaverschoice.procurement import compute_procurement_decision
+from beaverschoice.tooling import _normalize_date_input
+from beaverschoice.transactions import get_all_inventory
 
 
 class ProcurementTool(Tool):
@@ -42,6 +44,26 @@ class ProcurementTool(Tool):
                 "request": product_request,
                 "as_of_date": as_of_date or datetime.now().isoformat(),
             }
+
+
+class InventorySnapshotTool(Tool):
+    """Tool that returns current inventory by item using get_all_inventory."""
+
+    name = "inventory_snapshot"
+    description = "Return available inventory quantities per item as of a date."
+    inputs = {
+        "as_of_date": {"type": "string", "description": "ISO 8601 date representing when to check inventory", "nullable": True}
+    }
+    output_type = "object"
+
+    def __init__(self, engine=None):
+        super().__init__()
+        self.engine = engine or get_engine()
+
+    def forward(self, as_of_date: str | None = None) -> dict:
+        date = _normalize_date_input(as_of_date or datetime.now(), "as_of_date")
+        inventory = get_all_inventory(self.engine, date)
+        return {"as_of_date": date, "inventory": inventory}
 
 
 class FinalAnswerTool(Tool):
@@ -101,16 +123,17 @@ class InventoryProcurementAgent(ToolCallingAgent):
         if model is None:
             raise ValueError("An LLM model must be provided to InventoryProcurementAgent")
         procurement_tool = ProcurementTool(engine=self.engine)
+        snapshot_tool = InventorySnapshotTool(engine=self.engine)
         final_answer_tool = FinalAnswerTool()
         super().__init__(
-            tools=[procurement_tool, final_answer_tool],
+            tools=[procurement_tool, snapshot_tool, final_answer_tool],
             model=model,
             add_base_tools=False,
             max_tool_threads=1,
             instructions=(
-                "You are the Inventory & Procurement agent. Call the inventory_procurement tool exactly once with the "
-                "customer request text and as_of_date. Pass the tool's JSON result directly to final_answer without "
-                "summaries or rephrasing."
+                "You are the Inventory & Procurement agent. For product requests, call inventory_procurement exactly once "
+                "with the customer request text and as_of_date. If the user asks for inventory levels by item, call "
+                "inventory_snapshot. Pass any tool result directly to final_answer without summaries or rephrasing."
             ),
             **kwargs,
         )
