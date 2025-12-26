@@ -1,94 +1,52 @@
-# Munder Difflin Multi-Agent System Project
+# README
 
-Welcome to the starter code repository for the **Munder Difflin Paper Company Multi-Agent System Project**! This repository contains the starter code and tools you will need to design, build, and test a multi-agent system that supports core business operations at a fictional paper manufacturing company.
+BeaversChoice implements a five-agent, text-only workflow for the fictional Munder Difflin Paper Company. An orchestrator routes each customer turn to quoting, ordering, or finance tools; specialized agents keep pricing, procurement, fulfillment, and reporting logic isolated while sharing a common SQLite store for inventory and transactions.
 
-## Project Context
+## Solution Overview
+- **Agents (smolagents ToolCallingAgent):** Orchestrator fronts all requests; Quote agent prices using recent quotes plus live availability; Inventory/Procurement agent maps free-form asks to catalog items and recommends restocks; Order Execution agent records sales, triggers budget-aware replenishment, and returns ETAs; Finance agent snapshots cash/inventory and top sellers.
+- **Data + state:** `init_database` seeds `munder_difflin.db` from `data/` CSVs, loads initial cash/inventory via transactions, and adds historical quotes/requests used for anchoring prices.
+- **Pricing + procurement:** Quotes anchor to similar historical requests, adjust for order size, and add markup when stock is low. Procurement matches paraphrased items (synonyms + token overlap), checks against min stock, and surfaces delivery dates from simple supplier lead times.
+- **Fulfillment:** Orders parse multi-line item lists, ship what is available, create sales transactions, then restock to cover backorders while respecting current cash. Customer-facing summaries include shipped/backordered quantities and ETAs.
+- **Reporting:** Finance snapshots compute cash, inventory value, total assets, and top sellers; the orchestrator returns concise status lines. A high-level architecture diagram lives in `documentation/diagram.png`.
 
-You’ve been hired as an AI consultant by Munder Difflin Paper Company, a fictional enterprise looking to modernize their workflows. They need a smart, modular **multi-agent system** to automate:
+## Repository Layout
+- `runner.py`: Entry point that seeds the DB, builds agents, and runs the sample scenario loop.
+- `beaverschoice/`: Core package (agents, procurement, logistics, transactions, finance, tooling, config).
+- `data/`: CSV inputs for quote history and request scenarios.
+- `documentation/diagram.(png|mmd)`: Architecture diagram.
+- `test_results.csv`: Generated after running the sample scenarios.
 
-- **Inventory checks** and restocking decisions
-- **Quote generation** for incoming sales inquiries
-- **Order fulfillment** including supplier logistics and transactions
+## Setup
+1) Python 3.8+ (tested with pandas/SQLAlchemy 2.x and smolagents 1.23).
+2) Install deps: `pip install -r requirements.txt`
+3) Configure API access (OpenAI-compatible):
+   - Copy `example.env` to `.env` and set `OPENAI_API_KEY` and `OPENAI_BASE_URL` (defaults to Udacity’s proxy).
+4) Optional: set `SMOLAGENTS_TRACE=1` to see tool-calling traces in logs.
 
-Your solution must use a maximum of **5 agents** and process inputs and outputs entirely via **text-based communication**.
+## Running the Sample Scenarios
+1) From this folder: `python runner.py`
+2) The script will:
+   - Initialize/overwrite `munder_difflin.db` with seeded data.
+   - Build all agents (default model `gpt-4o-mini`, override via `initialize_agents(model_id=...)`).
+   - Replay `data/quote_requests_sample.csv` in date order, printing responses and writing `test_results.csv` with cash/inventory after each request.
 
-This project challenges your ability to orchestrate agents using modern Python frameworks like `smolagents`, `pydantic-ai`, or `npcsh`, and combine that with real data tools like `sqlite3`, `pandas`, and LLM prompt engineering.
+## Using the Agents Programmatically
+```python
+from runner import initialize_agents, handle_request
 
----
+agents = initialize_agents(model_id="gpt-4o-mini")
+orchestrator = agents["orchestrator"]
+response = handle_request(
+    orchestrator,
+    "Need 300 flyers for a campus fair (Date of request: 2025-01-05)",
+    {"as_of_date": "2025-01-05", "order_size": "large", "event_type": "fair"},
+)
+print(response)
+```
 
-## What’s Included
+## Tests
+- Fast unit tests (no live LLM calls) live in `tests/`. Run `pytest` to exercise procurement, quoting, order execution, and finance helpers against the seeded SQLite DB.
 
-From the `project.zip` starter archive, you will find:
-
-- `project_starter.py`: The main Python script you will modify to implement your agent system
-- `quotes.csv`: Historical quote data used for reference by quoting agents
-- `quote_requests.csv`: Incoming customer requests used to build quoting logic
-- `quote_requests_sample.csv`: A set of simulated test cases to evaluate your system
-
----
-
-## Workspace Instructions
-
-All the files have been provided in the VS Code workspace on the Udacity platform. Please install the agent orchestration framework of your choice.
-
-## Local setup instructions
-
-1. Install dependencies
-
-Make sure you have Python 3.8+ installed.
-
-You can install all required packages using the provided requirements.txt file:
-
-`pip install -r requirements.txt`
-
-If you're using smolagents, install it separately:
-
-`pip install smolagents`
-
-For other options like pydantic-ai or npcsh[lite], refer to their documentation.
-
-2. Create .env File
-
-Add your OpenAI-compatible API key:
-
-`UDACITY_OPENAI_API_KEY=your_openai_key_here`
-
-This project uses a custom OpenAI-compatible proxy hosted at https://openai.vocareum.com/v1.
-
-## How to Run the Project
-
-Start by defining your agents in the `"YOUR MULTI AGENT STARTS HERE"` section inside `template.py`. Once your agent team is ready:
-
-1. Run the `run_test_scenarios()` function at the bottom of the script.
-2. This will simulate a series of customer requests.
-3. Your system should respond by coordinating inventory checks, generating quotes, and processing orders.
-
-Output will include:
-
-- Agent responses
-- Cash and inventory updates
-- Final financial report
-- A `test_results.csv` file with all interaction logs
-
----
-
-## Tips for Success
-
-- Start by sketching a **flow diagram** to visualize agent responsibilities and interactions.
-- Test individual agent tools before full orchestration.
-- Always include **dates** in customer requests when passing data between agents.
-- Ensure every quote includes **bulk discounts** and uses past data when available.
-- Use the **exact item names** from the database to avoid transaction failures.
-
----
-
-## Submission Checklist
-
-Make sure to submit the following files:
-
-1. Your completed `template.py` or `project_starter.py` with all agent logic
-2. A **workflow diagram** describing your agent architecture and data flow
-3. A `README.txt` or `design_notes.txt` explaining how your system works
-4. Outputs from your test run (like `test_results.csv`)
-
----
+## Solution Notes
+- Evaluation on the provided 20-scenario script shows consistent ETAs/backorder messaging and cash/inventory tracking; large restocks can drain cash (see `REPORT.md` for detailed observations and improvement ideas).
+- Orchestrator keeps routing deterministic under the five-agent limit, while narrow tool surfaces prevent LLM paraphrasing from breaking structured outputs.
